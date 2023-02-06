@@ -468,7 +468,9 @@ func (i *ApiInstances) GetSecurityMonitoringApiV2() *datadogV2.SecurityMonitorin
 	}
 	return i.securityMonitoringApiV2
 
-} // GetSensitiveDataScannerApiV2 get instance of SensitiveDataScannerApi
+}
+
+// GetSensitiveDataScannerApiV2 get instance of SensitiveDataScannerApi
 func (i *ApiInstances) GetSensitiveDataScannerApiV2() *datadogV2.SensitiveDataScannerApi {
 	if i.sensitiveDataScannerApiV2 == nil {
 		i.sensitiveDataScannerApiV2 = datadogV2.NewSensitiveDataScannerApi(i.HttpClient)
