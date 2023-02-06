@@ -15,9 +15,9 @@ import (
 )
 
 func TestAccDatadogSensitiveDataScannerGroup_Basic(t *testing.T) {
-	// if isRecording() || isReplaying() {
-	// 	t.Skip("This test doesn't support recording or replaying")
-	// }
+	if isRecording() || isReplaying() {
+		t.Skip("This test doesn't support recording or replaying")
+	}
 	t.Parallel()
 	ctx, accProviders := testAccProviders(context.Background(), t)
 	accProvider := testAccProvider(t, accProviders)
@@ -61,16 +61,16 @@ func TestAccDatadogSensitiveDataScannerGroup_Basic(t *testing.T) {
 
 func testAccCheckDatadogSensitiveDataScannerGroup(name string) string {
 	return fmt.Sprintf(`
-	resource "datadog_sensitive_data_scanner_group" "sample_group" {
+resource "datadog_sensitive_data_scanner_group" "sample_group" {
 	name           = "%s"
 	description    = "optional description"
 	product_list   = ["logs"]
 	is_enabled     = true
 	filter {
-	query = "hotel:trivago"
+		query = "hotel:trivago"
 	}
-	}
-	`, name)
+}
+`, name)
 }
 
 func testAccCheckDatadogSensitiveDataScannerGroupUpdate(name string) string {

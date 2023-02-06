@@ -2,86 +2,131 @@ package datadog
 
 import (
 	"context"
-	"strconv"
-
-	"github.com/terraform-providers/terraform-provider-datadog/datadog/internal/utils"
+	"fmt"
 
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadogV2"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/terraform-providers/terraform-provider-datadog/datadog/internal/utils"
 )
 
 func resourceDatadogSensitiveDataScannerGroup() *schema.Resource {
 	return &schema.Resource{
-		Description:   "Provides a Datadog SensitiveDataScannerGroup resource. This can be used to create and manage Datadog sensitive_data_scanner_group.",
+		Description:   "Provides a Sensitive Data Scanner group resource.",
 		ReadContext:   resourceDatadogSensitiveDataScannerGroupRead,
 		CreateContext: resourceDatadogSensitiveDataScannerGroupCreate,
 		UpdateContext: resourceDatadogSensitiveDataScannerGroupUpdate,
 		DeleteContext: resourceDatadogSensitiveDataScannerGroupDelete,
-		Importer: &schema.ResourceImporter{
-			StateContext: schema.ImportStatePassthroughContext,
-		},
-
 		Schema: map[string]*schema.Schema{
+			"name": {
+				Description: "Name of the Datadog scanning group.",
+				Type:        schema.TypeString,
+				Required:    true,
+			},
 			"description": {
+				Description: "Description of the Datadog scanning group.",
 				Type:        schema.TypeString,
 				Optional:    true,
-				Description: "Description of the group.",
+			},
+			"product_list": {
+				Description: "List of products the scanning group applies.",
+				Type:        schema.TypeList,
+				Required:    true,
+				MaxItems:    4,
+				Elem: &schema.Schema{
+					Type: schema.TypeString,
+				},
+			},
+			"is_enabled": {
+				Description: "Whether or not the scanning group is enabled.",
+				Type:        schema.TypeBool,
+				Required:    true,
 			},
 			"filter": {
+				Description: "Filter object the scanning group applies.",
 				Type:        schema.TypeList,
-				Optional:    true,
 				MaxItems:    1,
-				Description: "Filter for the Scanning Group.",
+				Required:    true,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"query": {
-							Type:        schema.TypeString,
-							Optional:    true,
 							Description: "Query to filter the events.",
+							Type:        schema.TypeString,
+							Required:    true,
 						},
 					},
 				},
 			},
-			"is_enabled": {
-				Type:        schema.TypeBool,
-				Optional:    true,
-				Description: "Whether or not the group is enabled.",
-			},
-			"name": {
-				Type:        schema.TypeString,
-				Optional:    true,
-				Description: "Name of the group.",
-			},
-			"product_list": {
-				Type:        schema.TypeList,
-				Optional:    true,
-				Description: "List of products the scanning group applies.",
-				Elem:        &schema.Schema{Type: schema.TypeString},
-			},
 		},
 	}
+}
+
+func buildTerraformGroupFilter(ddFilter datadogV2.SensitiveDataScannerFilter) *[]map[string]interface{} {
+	tfFilter := map[string]interface{}{
+		"query": ddFilter.GetQuery(),
+	}
+	return &[]map[string]interface{}{tfFilter}
+}
+
+func buildDatadogGroupFilter(tfFilter map[string]interface{}) *datadogV2.SensitiveDataScannerFilter {
+	ddFilter := datadogV2.NewSensitiveDataScannerFilterWithDefaults()
+	if tfQuery, exists := tfFilter["query"].(string); exists {
+		ddFilter.SetQuery(tfQuery)
+	}
+	return ddFilter
+}
+
+func buildScanningGroupAttributes(d *schema.ResourceData) *datadogV2.SensitiveDataScannerGroupAttributes {
+	attributes := &datadogV2.SensitiveDataScannerGroupAttributes{}
+
+	if description, ok := d.GetOk("description"); ok {
+		attributes.SetDescription(description.(string))
+	}
+
+	if tfFilter := d.Get("filter").([]interface{}); len(tfFilter) > 0 {
+		attributes.SetFilter(*buildDatadogGroupFilter(tfFilter[0].(map[string]interface{})))
+	} else {
+		filter := datadogV2.NewSensitiveDataScannerFilterWithDefaults()
+		filter.SetQuery("*")
+		attributes.SetFilter(*filter)
+	}
+
+	if isEnabled := d.Get("is_enabled"); isEnabled != nil {
+		fmt.Println(isEnabled)
+		attributes.SetIsEnabled(isEnabled.(bool))
+	}
+
+	if name, ok := d.GetOk("name"); ok {
+		attributes.SetName(name.(string))
+	}
+
+	productList := []datadogV2.SensitiveDataScannerProduct{}
+	for _, s := range d.Get("product_list").([]interface{}) {
+		sensitiveDataScannerProductItem, _ := datadogV2.NewSensitiveDataScannerProductFromValue(s.(string))
+		productList = append(productList, *sensitiveDataScannerProductItem)
+	}
+	attributes.SetProductList(productList)
+
+	return attributes
 }
 
 func resourceDatadogSensitiveDataScannerGroupRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	providerConf := meta.(*ProviderConfiguration)
 	apiInstances := providerConf.DatadogApiInstances
 	auth := providerConf.Auth
+	resp, httpResponse, err := apiInstances.GetSensitiveDataScannerApiV2().ListScanningGroups(auth)
 
-	resp, httpResp, err := apiInstances.GetSensitiveDataScannerApiV2().ListScanningGroups(auth)
 	if err != nil {
-		if httpResp != nil && httpResp.StatusCode == 404 {
-			// Delete the resource from the local state since it doesn't exist anymore in the actual state
-			d.SetId("")
-			return nil
-		}
-		return utils.TranslateClientErrorDiag(err, httpResp, "error calling ListScanningGroups")
-	}
-	if err := utils.CheckForUnparsed(resp); err != nil {
-		return diag.FromErr(err)
+		return utils.TranslateClientErrorDiag(err, httpResponse, "error calling ListScanningGroups")
 	}
 
-	return updateSensitiveDataScannerGroupState(d, &resp)
+	groupId := d.Id()
+
+	if groupFound := findSensitiveDataScannerGroupHelper(groupId, resp); groupFound != nil {
+		return updateSensitiveDataScannerGroupState(d, groupFound.Attributes)
+	}
+
+	return nil
 }
 
 func resourceDatadogSensitiveDataScannerGroupCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
@@ -89,7 +134,7 @@ func resourceDatadogSensitiveDataScannerGroupCreate(ctx context.Context, d *sche
 	apiInstances := providerConf.DatadogApiInstances
 	auth := providerConf.Auth
 
-	body := buildSensitiveDataScannerGroupRequestBody(d)
+	body := buildSensitiveDataScannerGroupCreateRequestBody(d)
 
 	resp, httpResp, err := apiInstances.GetSensitiveDataScannerApiV2().CreateScanningGroup(auth, *body)
 	if err != nil {
@@ -100,39 +145,16 @@ func resourceDatadogSensitiveDataScannerGroupCreate(ctx context.Context, d *sche
 	}
 	d.SetId(resp.Data.GetId())
 
-	return updateSensitiveDataScannerGroupState(d, &resp)
+	return updateSensitiveDataScannerGroupState(d, resp.Data.Attributes)
 }
 
-func buildSensitiveDataScannerGroupRequestBody(d *schema.ResourceData) *datadogV2.SensitiveDataScannerGroupCreateRequest {
-	attributes := datadogV2.NewSensitiveDataScannerGroupAttributesWithDefaults()
-
-	if description, ok := d.GetOk("description"); ok {
-		attributes.SetDescription(description.(string))
-	}
-	filter := datadogV2.NewSensitiveDataScannerFilterWithDefaults()
-
-	if query, ok := d.GetOk("query"); ok {
-		filter.SetQuery(query.(string))
-	}
-	attributes.SetFilter(*filter)
-
-	if isEnabled, ok := d.GetOk("is_enabled"); ok {
-		attributes.SetIsEnabled(isEnabled.(bool))
-	}
-
-	if name, ok := d.GetOk("name"); ok {
-		attributes.SetName(name.(string))
-	}
-	productList := []datadogV2.SensitiveDataScannerProduct{}
-	for _, s := range d.Get("product_list").([]interface{}) {
-		sensitiveDataScannerProductItem, _ := datadogV2.NewSensitiveDataScannerProductFromValue(s.(string))
-		productList = append(productList, *sensitiveDataScannerProductItem)
-	}
-	attributes.SetProductList(productList)
+func buildSensitiveDataScannerGroupCreateRequestBody(d *schema.ResourceData) *datadogV2.SensitiveDataScannerGroupCreateRequest {
+	attributes := buildScanningGroupAttributes(d)
 
 	req := datadogV2.NewSensitiveDataScannerGroupCreateRequestWithDefaults()
 	req.Data = datadogV2.NewSensitiveDataScannerGroupCreateWithDefaults()
 	req.Data.SetAttributes(*attributes)
+	req.Meta = datadogV2.NewSensitiveDataScannerMetaVersionOnly()
 
 	return req
 }
@@ -148,46 +170,25 @@ func resourceDatadogSensitiveDataScannerGroupUpdate(ctx context.Context, d *sche
 
 	resp, httpResp, err := apiInstances.GetSensitiveDataScannerApiV2().UpdateScanningGroup(auth, id, *body)
 	if err != nil {
-		return utils.TranslateClientErrorDiag(err, httpResp, "error creating SensitiveDataScannerGroup")
+		return utils.TranslateClientErrorDiag(err, httpResp, "error updating SensitiveDataScannerGroup")
 	}
 	if err := utils.CheckForUnparsed(resp); err != nil {
 		return diag.FromErr(err)
 	}
-	d.SetId(resp.Data.GetId())
+	d.SetId(id)
 
-	return updateSensitiveDataScannerGroupState(d, &resp)
+	return updateSensitiveDataScannerGroupState(d, body.Data.Attributes)
 }
 
 func buildSensitiveDataScannerGroupUpdateRequestBody(d *schema.ResourceData) *datadogV2.SensitiveDataScannerGroupUpdateRequest {
-	attributes := datadogV2.NewSensitiveDataScannerGroupAttributesWithDefaults()
-
-	if description, ok := d.GetOk("description"); ok {
-		attributes.SetDescription(description.(string))
-	}
-	filter := datadogV2.NewSensitiveDataScannerFilterWithDefaults()
-
-	if query, ok := d.GetOk("query"); ok {
-		filter.SetQuery(query.(string))
-	}
-	attributes.SetFilter(*filter)
-
-	if isEnabled, ok := d.GetOk("is_enabled"); ok {
-		attributes.SetIsEnabled(isEnabled.(bool))
-	}
-
-	if name, ok := d.GetOk("name"); ok {
-		attributes.SetName(name.(string))
-	}
-	productList := []datadogV2.SensitiveDataScannerProduct{}
-	for _, s := range d.Get("product_list").([]interface{}) {
-		sensitiveDataScannerProductItem, _ := datadogV2.NewSensitiveDataScannerProductFromValue(s.(string))
-		productList = append(productList, *sensitiveDataScannerProductItem)
-	}
-	attributes.SetProductList(productList)
+	attributes := buildScanningGroupAttributes(d)
 
 	req := datadogV2.NewSensitiveDataScannerGroupUpdateRequestWithDefaults()
 	req.Data = *datadogV2.NewSensitiveDataScannerGroupUpdateWithDefaults()
 	req.Data.SetAttributes(*attributes)
+	req.Data.SetId(d.Id())
+
+	req.Meta = *datadogV2.NewSensitiveDataScannerMetaVersionOnly()
 
 	return req
 }
@@ -200,14 +201,9 @@ func resourceDatadogSensitiveDataScannerGroupDelete(ctx context.Context, d *sche
 	id := d.Id()
 	body := datadogV2.NewSensitiveDataScannerGroupDeleteRequestWithDefaults()
 	metaVar := datadogV2.NewSensitiveDataScannerMetaVersionOnlyWithDefaults()
-
-	if version, ok := d.GetOk("version"); ok {
-		versionInt, _ := strconv.ParseInt(version.(string), 10, 64)
-		metaVar.SetVersion(versionInt)
-	}
 	body.SetMeta(*metaVar)
 
-	_, httpResp, err := apiInstances.GetSensitiveDataScannerApiV2().DeleteScanningGroup(auth, id, body)
+	_, httpResp, err := apiInstances.GetSensitiveDataScannerApiV2().DeleteScanningGroup(auth, id, *body)
 	if err != nil {
 		// The resource is assumed to still exist, and all prior state is preserved.
 		return utils.TranslateClientErrorDiag(err, httpResp, "error deleting SensitiveDataScannerGroup")
@@ -216,7 +212,31 @@ func resourceDatadogSensitiveDataScannerGroupDelete(ctx context.Context, d *sche
 	return nil
 }
 
-func updateSensitiveDataScannerGroupState(d *schema.ResourceData, resp *datadogV2.SensitiveDataScannerGetConfigResponse) diag.Diagnostics {
+func updateSensitiveDataScannerGroupState(d *schema.ResourceData, groupAttributes *datadogV2.SensitiveDataScannerGroupAttributes) diag.Diagnostics {
+	if err := d.Set("name", groupAttributes.GetName()); err != nil {
+		return diag.FromErr(err)
+	}
+	if err := d.Set("description", groupAttributes.GetDescription()); err != nil {
+		return diag.FromErr(err)
+	}
+	if err := d.Set("is_enabled", groupAttributes.GetIsEnabled()); err != nil {
+		return diag.FromErr(err)
+	}
+	if err := d.Set("product_list", groupAttributes.GetProductList()); err != nil {
+		return diag.FromErr(err)
+	}
+	if err := d.Set("filter", buildTerraformGroupFilter(groupAttributes.GetFilter())); err != nil {
+		return diag.FromErr(err)
+	}
+	return nil
+}
+
+func findSensitiveDataScannerGroupHelper(groupId string, response datadogV2.SensitiveDataScannerGetConfigResponse) *datadogV2.SensitiveDataScannerGroupIncludedItem {
+	for _, resource := range response.Included {
+		if *resource.SensitiveDataScannerGroupIncludedItem.Id == groupId {
+			return resource.SensitiveDataScannerGroupIncludedItem
+		}
+	}
 
 	return nil
 }
