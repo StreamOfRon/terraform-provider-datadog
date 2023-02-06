@@ -9,6 +9,18 @@ import (
 	"github.com/terraform-providers/terraform-provider-datadog/datadog/internal/utils"
 )
 
+// var ruleResource = &schema.Resource{
+// 	Description: "Rule that scans data coming through the scanning group.",
+// 	Schema: map[string]*schema.Schema{
+// 		"name": {},
+// 		"description": {},
+// 		"namespaces": {},
+// 		"excluded_namespaces": {},
+// 		"pattern": {},
+// 		"text_replacement": {},
+// 	}
+// }
+
 func resourceDatadogSensitiveDataScannerGroup() *schema.Resource {
 	return &schema.Resource{
 		Description:   "Provides a Sensitive Data Scanner group resource.",
@@ -56,6 +68,12 @@ func resourceDatadogSensitiveDataScannerGroup() *schema.Resource {
 					},
 				},
 			},
+			// "rules": {
+			// 	Description: "List of scanning rules within the group. Rules are responsible to scan the data according to predefined regexes.",
+			// 	Type: schema.TypeList,
+			// 	Optional: true,
+			// 	Elem: ruleResource,
+			// }
 		},
 	}
 }
